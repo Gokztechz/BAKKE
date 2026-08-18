@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bakke
+      POSTGRES_PASSWORD: bakke
+      POSTGRES_DB: bakke
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bakke -d bakke"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg2://bakke:bakke@postgres:5432/bakke
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: development
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+      STT_PROVIDER: ${STT_PROVIDER:-mock}
+      VISION_PROVIDER: ${VISION_PROVIDER:-mock}
+      VIDEO_UNDERSTANDING_PROVIDER: ${VIDEO_UNDERSTANDING_PROVIDER:-mock}
+      VIDEO_GENERATION_PROVIDER: ${VIDEO_GENERATION_PROVIDER:-mock}
+      VIDEO_GENERATION_API_KEY: ${VIDEO_GENERATION_API_KEY:-}
+      VIDEO_GENERATION_MODEL: ${VIDEO_GENERATION_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      MAX_REASONING_ITERATIONS: 5
+      TOP_N_DEFAULT: 10
+      STORAGE_PROVIDER: local
+      VIDEO_OUTPUT_DIR: /app/data/videos
+    volumes:
+      - ./backend:/app
+      - bakkedata:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: sh -c "alembic upgrade head && python -m app.jobs.worker"
+    environment: *backend_env
+    volumes:
+      - ./backend:/app
+      - bakkedata:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  bakkedata:
